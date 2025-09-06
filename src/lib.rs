@@ -112,6 +112,7 @@ impl FairSwap {
         (pool_id, token0, token1)
     }
 
+    // Given a U256 value, return the integer square root of the value
     fn integer_sqrt(&self, x: U256) -> U256 {
         let two = U256::from(2);
 
@@ -123,6 +124,14 @@ impl FairSwap {
             z = (x / z + z) / two;
         }
 
+        y
+    }
+
+    // Given two U256 values, return the smaller of the two
+    fn min(&self, x: U256, y: U256) -> U256 {
+        if x < y {
+            return x;
+        }
         y
     }
 }
@@ -213,5 +222,39 @@ impl FairSwap {
         let pool = self.pools.get(pool_id);
         let position = pool.positions.get(position_id);
         position.liquidity.get()
+    }
+
+    // This function is used to calculate the amounts of tokens to transfer to the pool
+    // when adding liquidity. It takes in the desired amounts of each token, the minimum amounts of each token, and the current balances of the pool.
+    pub fn get_liquidity_amounts(
+        &self,
+        amount_0_desired: U256,
+        amount_1_desired: U256,
+        amount_0_min: U256,
+        amount_1_min: U256,
+        balance_0: U256,
+        balance_1: U256,
+    ) -> Result<(U256, U256), FairSwapError> {
+        // If the pool has no balance of either token already, this is initial liquidity so we can just return the desired amounts
+        if balance_0.eq(&U256::ZERO) && balance_1.eq(&U256::ZERO) {
+            return Ok((amount_0_desired, amount_1_desired));
+        }
+
+        // Otherwise, we need to check if their desired amounts are within the bounds of the pool
+        let amount_1_optimal = (amount_0_desired * balance_1) / balance_0;
+        if amount_1_optimal <= amount_1_desired {
+            if amount_1_optimal < amount_1_min {
+                return Err(FairSwapError::InsufficientAmount(InsufficientAmount {}));
+            }
+
+            return Ok((amount_0_desired, amount_1_optimal));
+        }
+
+        let amount_0_optimal = (amount_1_desired * balance_0) / balance_1;
+        if amount_0_optimal < amount_0_min {
+            return Err(FairSwapError::InsufficientAmount(InsufficientAmount {}));
+        }
+
+        return Ok((amount_0_optimal, amount_1_desired));
     }
 }
