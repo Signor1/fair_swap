@@ -29,8 +29,8 @@ sol_storage! {
     // A pool is a pair of tokens and a fee which together uniquely identify the pool
     // The struct contains additional data that is used to track the pool's state
     pub struct Pool{
-        uint256 token0;
-        uint256 token1;
+        address token0;
+        address token1;
         uint24 fee;
         uint256 liquidity;
         uint256 balance0;
@@ -88,7 +88,43 @@ pub enum FairSwapError {
 
 impl FairSwap {
     // impl for private functions
-    todo!();
+    fn get_pool_id(
+        &self,
+        token_a: Address,
+        token_b: Address,
+        fee: U24,
+    ) -> (FixedBytes<32>, Address, Address) {
+        let token0: Address;
+        let token1: Address;
+
+        // Sort the tokens to ensure determinism
+        if token_a <= token_b {
+            token0 = token_a;
+            token1 = token_b;
+        } else {
+            token0 = token_b;
+            token1 = token_a;
+        }
+
+        let hash_data = (token0, token1, fee);
+        let pool_id = keccak(hash_data.abi_encode_sequence());
+
+        (pool_id, token0, token1)
+    }
+
+    fn integer_sqrt(&self, x: U256) -> U256 {
+        let two = U256::from(2);
+
+        let mut z: U256 = (x + U256::from(1)) >> 1;
+        let mut y = x;
+
+        while z < y {
+            y = z;
+            z = (x / z + z) / two;
+        }
+
+        y
+    }
 }
 
 #[public]
@@ -99,7 +135,38 @@ impl FairSwap {
         token_b: Address,
         fee: U24,
     ) -> Result<(), FairSwapError> {
-        todo!();
+        let (pool_id, token0, token1) = self.get_pool_id(token_a, token_b, fee);
+        let existing_pool = self.pools.get(pool_id);
+
+        // If one of the token addresses of this pool in the mapping is non-zero, the pool already exists in our mapping
+        if !existing_pool.token0.get().is_zero() || !existing_pool.token1.get().is_zero() {
+            return Err(FairSwapError::PoolAlreadyExists(PoolAlreadyExists {
+                pool_id: pool_id,
+            }));
+        }
+
+        let mut pool_setter = self.pools.setter(pool_id);
+        pool_setter.token0.set(token0);
+        pool_setter.token1.set(token1);
+        pool_setter.fee.set(fee);
+
+        // Initially the pool has no liquidity or token balances
+        pool_setter.liquidity.set(U256::from(0));
+        pool_setter.balance0.set(U256::from(0));
+        pool_setter.balance1.set(U256::from(0));
+
+        // Emit the PoolCreated event
+        log(
+            self.vm(),
+            PoolCreated {
+                pool_id,
+                token0,
+                token1,
+                fee,
+            },
+        );
+
+        Ok(())
     }
 
     #[payable]
@@ -131,5 +198,20 @@ impl FairSwap {
         zero_per_one: bool,
     ) -> Result<(), FairSwapError> {
         todo!();
+    }
+
+    // Given a pool ID and an owner address, compute a deterministic Position ID and returns it
+    pub fn get_position_id(&self, pool_id: FixedBytes<32>, owner: Address) -> FixedBytes<32> {
+        let hash_data = (pool_id, owner);
+        let position_id = keccak(hash_data.abi_encode_sequence());
+        position_id
+    }
+
+    // Given a pool ID and an owner address, return the user's position liquidity
+    pub fn get_position_liquidity(&self, pool_id: FixedBytes<32>, owner: Address) -> U256 {
+        let position_id = self.get_position_id(pool_id, owner);
+        let pool = self.pools.get(pool_id);
+        let position = pool.positions.get(position_id);
+        position.liquidity.get()
     }
 }
