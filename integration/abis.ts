@@ -74,6 +74,21 @@ export const FairSwapABI = [
   },
   {
     inputs: [
+      { internalType: "address", name: "token_a", type: "address" },
+      { internalType: "address", name: "token_b", type: "address" },
+      { internalType: "uint24", name: "fee", type: "uint24" },
+    ],
+    name: "getPoolId",
+    outputs: [
+      { internalType: "bytes32", name: "", type: "bytes32" },
+      { internalType: "address", name: "", type: "address" },
+      { internalType: "address", name: "", type: "address" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
       { internalType: "bytes32", name: "pool_id", type: "bytes32" },
       { internalType: "address", name: "owner", type: "address" },
     ],

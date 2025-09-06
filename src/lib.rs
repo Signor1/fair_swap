@@ -87,31 +87,6 @@ pub enum FairSwapError {
 }
 
 impl FairSwap {
-    // impl for private functions
-    fn get_pool_id(
-        &self,
-        token_a: Address,
-        token_b: Address,
-        fee: U24,
-    ) -> (FixedBytes<32>, Address, Address) {
-        let token0: Address;
-        let token1: Address;
-
-        // Sort the tokens to ensure determinism
-        if token_a <= token_b {
-            token0 = token_a;
-            token1 = token_b;
-        } else {
-            token0 = token_b;
-            token1 = token_a;
-        }
-
-        let hash_data = (token0, token1, fee);
-        let pool_id = keccak(hash_data.abi_encode_sequence());
-
-        (pool_id, token0, token1)
-    }
-
     // Given a U256 value, return the integer square root of the value
     fn integer_sqrt(&self, x: U256) -> U256 {
         let two = U256::from(2);
@@ -595,5 +570,29 @@ impl FairSwap {
         }
 
         return Ok((amount_0_optimal, amount_1_desired));
+    }
+
+    pub fn get_pool_id(
+        &self,
+        token_a: Address,
+        token_b: Address,
+        fee: U24,
+    ) -> (FixedBytes<32>, Address, Address) {
+        let token0: Address;
+        let token1: Address;
+
+        // Sort the tokens to ensure determinism
+        if token_a <= token_b {
+            token0 = token_a;
+            token1 = token_b;
+        } else {
+            token0 = token_b;
+            token1 = token_a;
+        }
+
+        let hash_data = (token0, token1, fee);
+        let pool_id = keccak(hash_data.abi_encode_sequence());
+
+        (pool_id, token0, token1)
     }
 }
