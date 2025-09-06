@@ -367,14 +367,89 @@ impl FairSwap {
         Ok(())
     }
 
+    // This function is used to remove liquidity from a pool. It takes in the pool ID and the
+    // amount of liquidity to remove.
+    // It returns an error if the pool does not exist, if the user's liquidity is insufficient,
+    // or if we fail to transfer the tokens to the user.
     pub fn remove_liquidity(
         &mut self,
         pool_id: FixedBytes<32>,
         liquidity_to_remove: U256,
     ) -> Result<(), FairSwapError> {
-        todo!();
+        let msg_sender = self.vm().msg_sender();
+        let address_this = self.vm().contract_address();
+
+        // Load the pool's current state
+        let pool = self.pools.get(pool_id);
+        let token0 = pool.token0.get();
+        let token1 = pool.token1.get();
+
+        // If both token addresses are zero, this pool is not initialized and does not exist
+        if token0.is_zero() && token1.is_zero() {
+            return Err(FairSwapError::PoolDoesNotExist(PoolDoesNotExist {
+                pool_id,
+            }));
+        }
+
+        let balance_0 = pool.balance0.get();
+        let balance_1 = pool.balance1.get();
+        let liquidity = pool.liquidity.get();
+
+        // Load the user's current position in the pool (default zero if they don't have one)
+        let position_id = self.get_position_id(pool_id, msg_sender);
+        let user_position = pool.positions.get(position_id);
+        let user_liquidity = user_position.liquidity.get();
+
+        if liquidity_to_remove > user_liquidity {
+            return Err(FairSwapError::InsufficientLiquidityOwned(
+                InsufficientLiquidityOwned {},
+            ));
+        }
+
+        // The amount of tokens to be removed is the % share of the pool's balance of each token
+        // based on the user's share of the pool's liquidity
+        // e.g. If user owns 10% of the pool's total liquidity, they will receive 10% of the pool's
+        // token0 balance, and 10% of the pool's token1 balance
+        let amount_0 = (balance_0 * liquidity_to_remove) / liquidity;
+        let amount_1 = (balance_1 * liquidity_to_remove) / liquidity;
+
+        if amount_0.is_zero() || amount_1.is_zero() {
+            return Err(FairSwapError::InsufficientLiquidityOwned(
+                InsufficientLiquidityOwned {},
+            ));
+        }
+
+        let mut pool_setter = self.pools.setter(pool_id);
+        pool_setter.liquidity.set(liquidity - liquidity_to_remove);
+        pool_setter.balance0.set(balance_0 - amount_0);
+        pool_setter.balance1.set(balance_1 - amount_1);
+        let mut position_setter = pool_setter.positions.setter(position_id);
+        position_setter
+            .liquidity
+            .set(user_liquidity - liquidity_to_remove);
+
+        // Transfer amount0 of token0 and amount1 of token1 to the user
+        self.try_transfer_token(token0, address_this, msg_sender, amount_0)?;
+        self.try_transfer_token(token1, address_this, msg_sender, amount_1)?;
+
+        // Emit the LiquidityBurned event
+        log(
+            self.vm(),
+            LiquidityBurned {
+                pool_id,
+                owner: msg_sender,
+                liquidity: liquidity_to_remove,
+            },
+        );
+
+        Ok(())
     }
 
+    // This function is used to swap tokens in a pool. It takes in the pool ID, the amount of
+    // input tokens to swap, the minimum amount of output tokens to receive, and a boolean
+    // indicating whether to swap is to sell token0 or token1.
+    // It returns an error if the pool does not exist, if the user's input amount is insufficient,
+    // or if we fail to transfer the tokens to the pool.
     #[payable]
     pub fn swap(
         &mut self,
