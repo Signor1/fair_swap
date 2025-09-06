@@ -85,3 +85,51 @@ pub enum FairSwapError {
     FailedToReturnExtraEth(FailedToReturnExtraEth),
     TooMuchSlippage(TooMuchSlippage),
 }
+
+impl FairSwap {
+    // impl for private functions
+    todo!();
+}
+
+#[public]
+impl FairSwap {
+    pub fn create_pool(
+        &mut self,
+        token_a: Address,
+        token_b: Address,
+        fee: U24,
+    ) -> Result<(), FairSwapError> {
+        todo!();
+    }
+
+    #[payable]
+    pub fn add_liquidity(
+        &mut self,
+        pool_id: FixedBytes<32>,
+        amount_0_desired: U256,
+        amount_1_desired: U256,
+        amount_0_min: U256,
+        amount_1_min: U256,
+    ) -> Result<(), FairSwapError> {
+        todo!();
+    }
+
+    pub fn remove_liquidity(
+        &mut self,
+        pool_id: FixedBytes<32>,
+        liquidity_to_remove: U256,
+    ) -> Result<(), FairSwapError> {
+        todo!();
+    }
+
+    #[payable]
+    pub fn swap(
+        &mut self,
+        pool_id: FixedBytes<32>,
+        input_amount: U256,
+        min_output_amount: U256,
+        zero_per_one: bool,
+    ) -> Result<(), FairSwapError> {
+        todo!();
+    }
+}

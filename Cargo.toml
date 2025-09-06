@@ -1,12 +1,12 @@
 [package]
-name = "stylus-hello-world"
+name = "fair_swap"
 version = "0.1.11"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/OffchainLabs/stylus-hello-world"
 repository = "https://github.com/OffchainLabs/stylus-hello-world"
 keywords = ["arbitrum", "ethereum", "stylus", "alloy"]
-description = "Stylus hello world example"
+description = "Fair Swap, a decentralized exchange protocol built on Arbitrum. It provides a secure and efficient way to exchange assets on the Arbitrum network."
 
 [dependencies]
 alloy-primitives = "=0.8.20"
@@ -29,7 +29,7 @@ debug = ["stylus-sdk/debug"]
 mini-alloc = ["stylus-sdk/mini-alloc"]
 
 [[bin]]
-name = "stylus-hello-world"
+name = "fair_swap"
 path = "src/main.rs"
 
 [lib]
