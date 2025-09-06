@@ -456,9 +456,96 @@ impl FairSwap {
         pool_id: FixedBytes<32>,
         input_amount: U256,
         min_output_amount: U256,
-        zero_per_one: bool,
+        zero_for_one: bool,
     ) -> Result<(), FairSwapError> {
-        todo!();
+        if input_amount.is_zero() {
+            return Err(FairSwapError::InsufficientAmount(InsufficientAmount {}));
+        }
+
+        let msg_sender = self.vm().msg_sender();
+        let address_this = self.vm().contract_address();
+
+        // Load the pool's current state
+        let pool = self.pools.get(pool_id);
+        let token0 = pool.token0.get();
+        let token1 = pool.token1.get();
+
+        // If both token addresses are zero, this pool is not initialized and does not exist
+        if token0.is_zero() && token1.is_zero() {
+            return Err(FairSwapError::PoolDoesNotExist(PoolDoesNotExist {
+                pool_id,
+            }));
+        }
+
+        let balance0 = pool.balance0.get();
+        let balance1 = pool.balance1.get();
+        let fee = pool.fee.get();
+
+        let original_k = balance0 * balance1;
+
+        let input_token = if zero_for_one { token0 } else { token1 };
+        let output_token = if zero_for_one { token1 } else { token0 };
+        let input_balance = if zero_for_one { balance0 } else { balance1 };
+        let output_balance = if zero_for_one { balance1 } else { balance0 };
+
+        // Here we solve for xy = k to keep k constant
+        // i.e. (input_balance * output_balance) = original_k
+        // ((input_balance + input_amount) * (output_balance - output_amount)) = original_k
+        // Therefore, (input_balance * output_balance) = (input_balance + input_amount) * (output_balance - output_amount)
+        // Solving for output_amount:
+        // output_amount = output_balance - ((input_balance * output_balance) / (input_balance + input_amount))
+        // i.e. output_amount = output_balance - (original_k / (input_balance + input_amount))
+
+        let output_amount = output_balance - (original_k / (input_balance + input_amount));
+
+        // Now we apply swap fees on the output amount so LPs earn some yield for providing liquidity
+        // First, we calculate the amount of fees to deduct
+        let fees = (output_amount * U256::from(fee)) / U256::from(10_000);
+        // Then, we calculate how much output amount the user will get after fees
+        let output_amount_after_fees = output_amount - fees;
+
+        // If the user's output amount is less than the minimum output amount, we return an error
+        if output_amount_after_fees < min_output_amount {
+            return Err(FairSwapError::TooMuchSlippage(TooMuchSlippage {}));
+        }
+
+        // Now we update the pool state (token balances)
+        let mut pool_setter = self.pools.setter(pool_id);
+        if zero_for_one {
+            pool_setter.balance0.set(balance0 + input_amount);
+            pool_setter
+                .balance1
+                .set(balance1 - output_amount_after_fees);
+        } else {
+            pool_setter
+                .balance0
+                .set(balance0 - output_amount_after_fees);
+            pool_setter.balance1.set(balance1 + input_amount);
+        }
+
+        // Transfer the input token from user to pool
+        self.try_transfer_token(input_token, msg_sender, address_this, input_amount)?;
+        // Transfer the output token from pool to user
+        self.try_transfer_token(
+            output_token,
+            address_this,
+            msg_sender,
+            output_amount_after_fees,
+        )?;
+
+        // Emit the Swap event
+        log(
+            self.vm(),
+            Swap {
+                pool_id,
+                user: msg_sender,
+                input_amount,
+                output_amount_after_fees,
+                fees,
+                zero_for_one,
+            },
+        );
+        Ok(())
     }
 
     // Given a pool ID and an owner address, compute a deterministic Position ID and returns it
