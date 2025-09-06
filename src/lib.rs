@@ -134,6 +134,97 @@ impl FairSwap {
         }
         y
     }
+
+    fn try_transfer_token(
+        &mut self,
+        token: Address,
+        from: Address,
+        to: Address,
+        amount: U256,
+    ) -> Result<(), FairSwapError> {
+        let address_this = self.vm().contract_address();
+
+        if from != address_this && to != address_this {
+            // We are transferring tokens between two addresses where we are neither the sender nor the receiver
+            return Err(FairSwapError::FailedOrInsufficientTokenTransfer(
+                FailedOrInsufficientTokenTransfer {
+                    token,
+                    from,
+                    to,
+                    amount,
+                },
+            ));
+        }
+
+        // We are transferring ETH
+        if token.is_zero() {
+            if from == address_this {
+                // We are sending ETH out
+                let result = self.vm().transfer_eth(to, amount);
+                if result.is_err() {
+                    return Err(FairSwapError::FailedOrInsufficientTokenTransfer(
+                        FailedOrInsufficientTokenTransfer {
+                            token,
+                            from,
+                            to,
+                            amount,
+                        },
+                    ));
+                }
+            } else if to == address_this {
+                // We are receiving ETH
+                if self.vm().msg_value() < amount {
+                    return Err(FairSwapError::FailedOrInsufficientTokenTransfer(
+                        FailedOrInsufficientTokenTransfer {
+                            token,
+                            from,
+                            to,
+                            amount,
+                        },
+                    ));
+                }
+
+                // Refund any excess ETH back to the sender
+                let extra_eth = self.vm().msg_value() - amount;
+                if extra_eth > U256::ZERO {
+                    self.try_transfer_token(token, address_this, from, extra_eth)?;
+                }
+            }
+        }
+        // We are transferring an ERC-20 token
+        else {
+            let token_contract = IERC20::new(token);
+            if from == address_this {
+                // We are sending the token out
+                let result = token_contract.transfer(&mut *self, to, amount);
+                if result.is_err() || result.unwrap() == false {
+                    return Err(FairSwapError::FailedOrInsufficientTokenTransfer(
+                        FailedOrInsufficientTokenTransfer {
+                            token,
+                            from,
+                            to,
+                            amount,
+                        },
+                    ));
+                }
+            } else if to == address_this {
+                // We are receiving the token
+                let result = token_contract.transfer_from(&mut *self, from, to, amount);
+                if result.is_err() || result.unwrap() == false {
+                    return Err(FairSwapError::FailedOrInsufficientTokenTransfer(
+                        FailedOrInsufficientTokenTransfer {
+                            token,
+                            from,
+                            to,
+                            amount,
+                        },
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[public]
@@ -178,6 +269,10 @@ impl FairSwap {
         Ok(())
     }
 
+    // This function is used to add liquidity to a pool. It takes in the pool ID, the desired
+    // amounts of each token, and the minimum amounts of each token.
+    // It returns an error if the pool does not exist, if the user's desired amounts are
+    // insufficient, or if we fail to transfer the tokens to the pool.
     #[payable]
     pub fn add_liquidity(
         &mut self,
@@ -187,7 +282,89 @@ impl FairSwap {
         amount_0_min: U256,
         amount_1_min: U256,
     ) -> Result<(), FairSwapError> {
-        todo!();
+        let msg_sender = self.vm().msg_sender();
+        let address_this = self.vm().contract_address();
+
+        // Load the pool's current state
+        let pool = self.pools.get(pool_id);
+        let token0 = pool.token0.get();
+        let token1 = pool.token1.get();
+
+        // If both token addresses are zero, this pool is not initialized and does not exist
+        if token0.is_zero() && token1.is_zero() {
+            return Err(FairSwapError::PoolDoesNotExist(PoolDoesNotExist {
+                pool_id,
+            }));
+        }
+
+        let balance_0 = pool.balance0.get();
+        let balance_1 = pool.balance1.get();
+        let liquidity = pool.liquidity.get();
+        let is_initial_liquidity = liquidity.is_zero();
+
+        // Load the user's current position in the pool (default zero if they don't have one)
+        let position_id = self.get_position_id(pool_id, msg_sender);
+        let user_position = pool.positions.get(position_id);
+        let user_liquidity = user_position.liquidity.get();
+
+        let (amount0, amount1) = self.get_liquidity_amounts(
+            amount_0_desired,
+            amount_1_desired,
+            amount_0_min,
+            amount_1_min,
+            balance_0,
+            balance_1,
+        )?;
+
+        // Calculate the new share of the pool's liquidity that the user will own
+        let new_user_liquidity = if is_initial_liquidity {
+            self.integer_sqrt(amount0 * amount1) - U256::from(1000) // subtract minimum liquidity
+        } else {
+            let l_0 = (amount0 * liquidity) / balance_0;
+            let l_1 = (amount1 * liquidity) / balance_1;
+            self.min(l_0, l_1)
+        };
+
+        // Calculate the new liquidity being added to the pool (same as the user's new liquidity if it's not the first time)
+        let new_pool_liquidity = if is_initial_liquidity {
+            new_user_liquidity + U256::from(1000) // Pool's total liquidity includes the minimum liquidity
+        } else {
+            new_user_liquidity
+        };
+
+        if new_pool_liquidity.is_zero() {
+            return Err(FairSwapError::InsufficientLiquidityMinted(
+                InsufficientLiquidityMinted {},
+            ));
+        }
+
+        // Update the pool's state (total liquidity, token balances, and user's position)
+        let mut pool_setter = self.pools.setter(pool_id);
+        pool_setter.liquidity.set(liquidity + new_pool_liquidity);
+        pool_setter.balance0.set(balance_0 + amount0);
+        pool_setter.balance1.set(balance_1 + amount1);
+
+        let mut user_position_setter = pool_setter.positions.setter(position_id);
+        user_position_setter
+            .liquidity
+            .set(user_liquidity + new_user_liquidity);
+        user_position_setter.owner.set(msg_sender);
+
+        // Transfer amount0 of token0 and amount1 of token1 to the pool
+        self.try_transfer_token(token0, msg_sender, address_this, amount0)?;
+        self.try_transfer_token(token1, msg_sender, address_this, amount1)?;
+
+        // Emit the LiquidityMinted event
+        log(
+            self.vm(),
+            LiquidityMinted {
+                pool_id,
+                owner: msg_sender,
+                liquidity: new_pool_liquidity,
+            },
+        );
+
+        Ok(())
     }
 
     pub fn remove_liquidity(
